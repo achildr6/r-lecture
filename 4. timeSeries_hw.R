@@ -1,0 +1,129 @@
+
+
+#################### SET FILE PATH ############################
+### path, file
+#  Define workspace
+
+library(data.table)
+
+#Defining Working Directory
+getwd()
+setwd("D://git_master//09. R_Git")
+
+mnet_csv_file <- file.path(getwd(), "//data//sample_kopo.csv")
+mnet_csv_file
+#################### LOAD LIBRARY ############################
+#install.packages("data.table")
+#install.packages("forecast")
+
+# Data processing speed is fast
+library(data.table)
+# Define library including timeseries model (NNET, HW,..)
+#install.packages("forecast")
+library(forecast)
+
+
+#################### READ DATA ############################
+### Define Global variable
+#mnet_csv_file <- file.path(root_dir, "mnet_sample.csv")
+?fread
+mnet <- fread(mnet_csv_file)
+################ PART 1. MNET
+### Define prediction seg
+
+#### 1. no filtering by product code
+
+# 1. Select specific row
+filteredData <- mnet[ subsidiary == 'SUBSIDIARY1' & 
+                   brand == 'BRAND2' & 
+                   model =="MODEL0393",]
+
+# 2. Select specific column
+testSelect <- filteredData[,.(subsidiary,brand,model,year,mon,sales_qty)]
+
+str(filteredData)
+
+# 3. Type change for Data
+filteredData[, Capa := as.numeric(Capa)]
+str(filteredData)
+
+# 4. Refine Data
+filteredData[Capa > 0 & Capa <= 300, Capa := 300]
+filteredData[Capa > 300 & Capa <= 500, Capa := 500]
+filteredData[Capa > 500 & Capa <= 700, Capa := 700]
+filteredData[Capa > 700, Capa := 1000]
+filteredData[, yearmon := year*100+mon]
+
+# 5. Sort Data
+seg <- c('subsidiary', 'product', 'model')
+by.var <- c(seg, 'year', 'mon')
+sortedData <- setkeyv(filteredData, by.var)
+
+
+# 6. Group Data
+by.var <- c(seg, 'yearmon', 'year','mon')
+groupData <- sortedData[ ,
+                .(sales_qty = sum(sales_qty)),
+                by = by.var]
+
+setkeyv(sortedData, by.var)
+
+
+# 8. Split Data
+TRAIN_DATA <- 201604
+
+trainData = groupData[yearmon <= TRAIN_DATA]
+testData = groupData[yearmon > TRAIN_DATA]
+
+summary(trainData)
+summary(testData)
+
+trainData_ts = ts(data=trainData$sales_qty, start=c(2014,1), frequency=12)
+trainData_ts
+
+## timeseries beta -> trends, gamma -> seasonality
+## seasonal
+fit = HoltWinters(trainData_ts, beta=F, gamma=T, seasonal = "additive")
+f = forecast(fit, h=12)
+f
+
+predictResult <- c(trainData_ts, f$mean)
+predictResult = data.frame(predictResult)
+setnames(predictResult, c("predictResult"), c("predict"))
+finalResult = cbind(groupData, predictResult)
+finalResult
+
+
+finalResult[predict < 0, predict := 0]
+
+class(finalResult)
+str(finalResult)
+
+finalResult = as.data.table(finalResult)
+
+# filtering only for testData
+finalResult2 = finalResult[ yearmon > TRAIN_DATA]
+
+# 예측결과 정리 Metrics 선언
+#install.packages("Metrics")
+library(Metrics)
+
+# RMSE, MAE, MAPE 산출
+rmse(finalResult2$sales_qty, finalResult2$predict)
+mae(finalResult2$sales_qty, finalResult2$predict)
+mape(finalResult2$sales_qty, finalResult2$predict)
+
+finalResult2
+
+library("reshape2")
+library("ggplot2")
+
+finalResult2$yearmon <- as.Date(
+  paste0(as.character(finalResult2$yearmon), '01'), format='%Y%m%d')
+
+ggplot(finalResult2, aes(x = yearmon)) + 
+  geom_line(aes(y = sales_qty), colour="blue") + 
+  geom_line(aes(y = predict), colour = "grey") + 
+  ylab(label="Number of new members") + 
+  xlab("Week")
+
